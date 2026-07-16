@@ -74,8 +74,12 @@
   .c-tier{width:76px;flex:none}
   .c-tier .lbl{font-size:13.5px;font-weight:700}
   .c-spark{flex:0 1 200px;min-width:0}
-  .c-spark svg{width:100%;height:34px;display:block}
+  .c-spark svg{width:100%;height:34px;display:block;touch-action:pan-y;cursor:crosshair}
   .c-spark .ax{display:flex;justify-content:space-between;font-size:9px;color:#5C6366;margin-top:3px}
+  #tip{position:fixed;display:none;z-index:10;pointer-events:none;white-space:nowrap;
+    background:#1E2225;border:1px solid #33393D;border-radius:8px;padding:5px 9px;
+    font-size:11px;color:#8A9195;box-shadow:0 6px 18px rgba(0,0,0,.55)}
+  #tip b{color:#E8ECEA;font-weight:600}
   .c-num{width:88px;flex:none;text-align:right}
   .c-num .big{display:flex;align-items:baseline;gap:4px;justify-content:flex-end}
   .c-num .big b{font-size:24px;font-weight:600;letter-spacing:-.02em;color:#E8ECEA}
@@ -150,7 +154,7 @@
   <div id="content" class="loading">Fetching forecast&hellip;</div>
 
   <div class="foot">
-    Condition is scored on the 8:00&ndash;12:00 window. Sparkline shows hourly wind 6a&ndash;8p; the dashed line marks the good cutoff. Faded days are long range and low confidence. Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
+    Condition and mph figures are the 8:00&ndash;12:00 average (sustained, gusts). Tap or hover the sparkline for hour-by-hour sustained/gust. Faded days are long range and low confidence. Data: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>.
   </div>
 </div>
 
@@ -221,10 +225,15 @@
     const t=data.hourly.time,w=data.hourly.wind_speed_10m,g=data.hourly.wind_gusts_10m;
     const byDay={};
     for(let i=0;i<t.length;i++){
-      if(w[i]==null||g[i]==null) continue;
+      if(w[i]==null) continue;
+      /* gusts are "max of the preceding hour": the value labeled T+1 covers T..T+1,
+         so the hour beginning at T takes g[i+1]; floor at sustained as sanity clamp */
+      const gv=(i+1<g.length&&g[i+1]!=null)?g[i+1]:g[i];
+      if(gv==null) continue;
+      const gust=Math.max(gv,w[i]);
       const [d,hh]=t[i].split("T"); const hr=parseInt(hh.slice(0,2),10);
       if(hr<6||hr>20) continue;
-      (byDay[d] ||= []).push({hr,wind:w[i],gust:g[i]});
+      (byDay[d] ||= []).push({hr,wind:w[i],gust:gust});
     }
     return Object.keys(byDay).sort()
       .filter(k=>byDay[k].filter(h=>h.hr>=8&&h.hr<12).length===4)
@@ -252,7 +261,8 @@
     $("content").id="content";
     $("content").innerHTML='<div id="list">'+days.map((day,i)=>{
       const am=day.hours.filter(h=>h.hr>=8&&h.hr<12);
-      const aw=Math.max(...am.map(h=>h.wind)), ag=Math.max(...am.map(h=>h.gust));
+      const aw=am.reduce((s,h)=>s+h.wind,0)/am.length,
+            ag=am.reduce((s,h)=>s+h.gust,0)/am.length;
       const tier=tierOf(aw,ag), c=C[tier];
       const pt=h=>(((h.hr-6)/14)*120).toFixed(1)+","+yOf(h.wind).toFixed(1);
       const pts=day.hours.map(pt).join(" ");
@@ -262,17 +272,59 @@
       return '<div class="row '+(i===0?'today ':'')+(i>=LOW_FROM?'low':'')+'">'
         +'<div class="c-day"><div class="dow">'+dow+'</div><div class="date">'+date+'</div></div>'
         +'<div class="c-tier"><div class="lbl" style="color:'+c.color+'">'+c.label+'</div></div>'
-        +'<div class="c-spark"><svg viewBox="0 0 120 34" preserveAspectRatio="none">'
+        +'<div class="c-spark" data-i="'+i+'"><svg viewBox="0 0 120 34" preserveAspectRatio="none">'
         +'<rect x="17" y="0" width="35" height="34" fill="rgba(255,255,255,.045)"/>'
         +'<line x1="0" x2="120" y1="'+thY+'" y2="'+thY+'" stroke="#2A2F32" stroke-width="1" stroke-dasharray="2 3"/>'
         +'<polyline points="'+pts+'" fill="none" stroke="#4A5054" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
         +'<polyline points="'+ptsAm+'" fill="none" stroke="'+c.color+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
+        +'<g class="hov" style="display:none">'
+        +'<line y1="0" y2="34" stroke="#8A9195" stroke-width="1" stroke-dasharray="2 2" vector-effect="non-scaling-stroke"/>'
+        +'<ellipse ry="2.8" fill="#E8ECEA"/></g>'
         +'</svg><div class="ax"><span>6a</span><span>noon</span><span>8p</span></div></div>'
         +'<div class="c-num"><div class="big"><b>'+aw.toFixed(0)+'</b><span>mph</span></div>'
         +'<div class="g">Gusts '+ag.toFixed(0)+'</div></div>'
         +'</div>';
     }).join("")+'</div>';
   }
+
+  /* ---------- sparkline tooltip ---------- */
+  const tip=document.createElement("div"); tip.id="tip"; document.body.appendChild(tip);
+  const fmtHr=h=>h===12?"noon":h<12?h+"a":(h-12)+"p";
+  let curHov=null;
+  function hideTip(){
+    tip.style.display="none";
+    if(curHov){ curHov.style.display="none"; curHov=null; }
+  }
+  function sparkMove(e){
+    const sp=e.target.closest?e.target.closest(".c-spark"):null;
+    if(!sp||!days.length) return hideTip();
+    const day=days[+sp.dataset.i]; if(!day) return hideTip();
+    const svg=sp.querySelector("svg"), r=svg.getBoundingClientRect();
+    const fx=Math.min(Math.max((e.clientX-r.left)/r.width,0),1);
+    const target=6+fx*14;
+    let h=day.hours[0];
+    for(const x of day.hours) if(Math.abs(x.hr-target)<Math.abs(h.hr-target)) h=x;
+    const px=((h.hr-6)/14)*120, py=yOf(h.wind);
+    const g=svg.querySelector(".hov");
+    if(curHov&&curHov!==g) curHov.style.display="none";
+    curHov=g; g.style.display="";
+    const ln=g.querySelector("line");
+    ln.setAttribute("x1",px); ln.setAttribute("x2",px);
+    const el=g.querySelector("ellipse");
+    el.setAttribute("cx",px); el.setAttribute("cy",py);
+    el.setAttribute("rx",(2.8*120/r.width).toFixed(2));
+    tip.innerHTML=fmtHr(h.hr)+' &nbsp;<b>'+h.wind.toFixed(0)+'</b>/'+h.gust.toFixed(0)+' mph';
+    tip.style.display="block";
+    const tw=tip.offsetWidth;
+    const tx=Math.min(Math.max(r.left+fx*r.width-tw/2,8),window.innerWidth-tw-8);
+    tip.style.left=tx+"px";
+    tip.style.top=(r.top-tip.offsetHeight-8)+"px";
+  }
+  document.addEventListener("pointermove",sparkMove);
+  document.addEventListener("pointerdown",sparkMove);
+  document.addEventListener("pointerup",e=>{ if(e.pointerType!=="mouse") hideTip(); });
+  document.addEventListener("pointercancel",hideTip);
+  window.addEventListener("scroll",hideTip,{passive:true});
 
   /* ---------- settings ---------- */
   $("gearBtn").onclick=()=>{ $("panel").classList.toggle("open"); $("locInput").value=locOverride||""; };
