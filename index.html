@@ -15,7 +15,7 @@
   .wrap{max-width:640px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
 
   header{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap}
-  .brand{display:flex;align-items:baseline;gap:3px}
+  .brand{display:flex;align-items:baseline;gap:3px;margin-left:1px}
   .brand svg{width:14px;height:14px;display:block;align-self:center}
   .brand b{font-size:17px;font-weight:600;letter-spacing:-.01em}
   #locName{font-size:13px;color:#7E8588}
@@ -66,10 +66,11 @@
   /* day rows */
   #list{display:flex;flex-direction:column;gap:8px}
   .row{background:#151719;border-radius:18px;
-    padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px}
+    padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:12px;
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:pan-y}
   .row.low{opacity:.55}
   .c-day{width:64px;flex:none}
-  .c-day .dow{font-size:17px;font-weight:600;letter-spacing:-.01em;color:#E8ECEA}
+  .c-day .dow{font-size:18px;font-weight:600;letter-spacing:-.01em;color:#E8ECEA}
   .c-day .date{font-size:11.5px;color:#6B7275;margin-top:2px}
   .c-tier{width:76px;flex:none}
   .c-tier .lbl{font-size:13.5px;font-weight:700}
@@ -82,7 +83,7 @@
   #tip b{color:#E8ECEA;font-weight:600}
   .c-num{width:88px;flex:none;text-align:right}
   .c-num .big{display:flex;align-items:baseline;gap:4px;justify-content:flex-end}
-  .c-num .big b{font-size:24px;font-weight:600;letter-spacing:-.02em;color:#E8ECEA}
+  .c-num .big b{font-size:25px;font-weight:600;letter-spacing:-.02em;color:#E8ECEA}
   .c-num .big span{font-size:11px;color:#6B7275}
   .c-num .g{font-size:11px;color:#6B7275;margin-top:1px}
 
@@ -95,9 +96,9 @@
     body{padding:20px 14px 32px}
     .row{gap:10px;padding:12px 14px}
     .c-day{width:auto;min-width:56px} .c-tier{width:auto;min-width:56px} .c-num{width:auto}
-    .c-day .dow{font-size:15px}
+    .c-day .dow{font-size:16px}
     .c-tier .lbl{font-size:12px}
-    .c-num .big b{font-size:18px}
+    .c-num .big b{font-size:19px}
   }
 </style>
 </head>
@@ -269,10 +270,10 @@
       const ptsAm=day.hours.filter(h=>h.hr>=8&&h.hr<=12).map(pt).join(" ");
       const dow=i===0?"Today":day.d.toLocaleDateString("en-US",{weekday:"short"});
       const date=day.d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
-      return '<div class="row '+(i===0?'today ':'')+(i>=LOW_FROM?'low':'')+'">'
+      return '<div class="row '+(i===0?'today ':'')+(i>=LOW_FROM?'low':'')+'" data-i="'+i+'">'
         +'<div class="c-day"><div class="dow">'+dow+'</div><div class="date">'+date+'</div></div>'
         +'<div class="c-tier"><div class="lbl" style="color:'+c.color+'">'+c.label+'</div></div>'
-        +'<div class="c-spark" data-i="'+i+'"><svg viewBox="0 0 120 34" preserveAspectRatio="none">'
+        +'<div class="c-spark"><svg viewBox="0 0 120 34" preserveAspectRatio="none">'
         +'<rect x="17" y="0" width="35" height="34" fill="rgba(255,255,255,.045)"/>'
         +'<line x1="0" x2="120" y1="'+thY+'" y2="'+thY+'" stroke="#2A2F32" stroke-width="1" stroke-dasharray="2 3"/>'
         +'<polyline points="'+pts+'" fill="none" stroke="#4A5054" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>'
@@ -296,14 +297,16 @@
     if(curHov){ curHov.style.display="none"; curHov=null; }
   }
   function sparkMove(e){
-    const sp=e.target.closest?e.target.closest(".c-spark"):null;
-    if(!sp||!days.length) return hideTip();
-    const day=days[+sp.dataset.i]; if(!day) return hideTip();
-    const svg=sp.querySelector("svg"), r=svg.getBoundingClientRect();
-    const fx=Math.min(Math.max((e.clientX-r.left)/r.width,0),1);
+    const row=e.target.closest?e.target.closest("#list .row"):null;
+    if(!row||!days.length) return hideTip();
+    const day=days[+row.dataset.i]; if(!day) return hideTip();
+    /* finger/cursor position across the WHOLE row maps to the 6a-8p range */
+    const rr=row.getBoundingClientRect();
+    const fx=Math.min(Math.max((e.clientX-rr.left)/rr.width,0),1);
     const target=6+fx*14;
     let h=day.hours[0];
     for(const x of day.hours) if(Math.abs(x.hr-target)<Math.abs(h.hr-target)) h=x;
+    const svg=row.querySelector(".c-spark svg"), r=svg.getBoundingClientRect();
     const px=((h.hr-6)/14)*120, py=yOf(h.wind);
     const g=svg.querySelector(".hov");
     if(curHov&&curHov!==g) curHov.style.display="none";
@@ -315,8 +318,9 @@
     el.setAttribute("rx",(2.8*120/r.width).toFixed(2));
     tip.innerHTML=fmtHr(h.hr)+' &nbsp;<b>'+h.wind.toFixed(0)+'</b>/'+h.gust.toFixed(0)+' mph';
     tip.style.display="block";
-    const tw=tip.offsetWidth;
-    const tx=Math.min(Math.max(r.left+fx*r.width-tw/2,8),window.innerWidth-tw-8);
+    /* anchor the tip above the marker on the sparkline, not the finger */
+    const mx=r.left+(px/120)*r.width, tw=tip.offsetWidth;
+    const tx=Math.min(Math.max(mx-tw/2,8),window.innerWidth-tw-8);
     tip.style.left=tx+"px";
     tip.style.top=(r.top-tip.offsetHeight-8)+"px";
   }
